@@ -1576,6 +1576,13 @@
             background-position: center;
             flex-shrink: 0;
         }
+        .asset-thumb img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 6px;
+        }
         .asset-name {
             flex: 1;
             overflow: hidden;
@@ -3846,7 +3853,7 @@
             } catch (e) { return null; }
         }
 
-        const NATIVE_TOKEN_METHODS = new Set(['notify','requestNotificationPermission','queueNotification','saveState','loadState','saveProject','loadProject','saveWorkspaces','loadWorkspaces','setCurrentWorkspace','getCurrentWorkspace','setAppForeground','setBuildState','getProviderSecretMeta','getProviderSecret','putProviderSecret','removeProviderSecret','saveProviderSecrets','scheduleBackgroundBuild','cancelBackgroundBuild','completeBackgroundBuild','getBackgroundBuildResult','requestAi','loginAsync','registerAsync','forgotPasswordAsync','sendEmailVerificationAsync','deleteAccountAsync','syncCurrentProjectAsync','authStatus','logout','getJob','clearLocalData']);
+        const NATIVE_TOKEN_METHODS = new Set(['notify','requestNotificationPermission','queueNotification','saveState','loadState','saveProject','loadProject','saveWorkspaces','loadWorkspaces','setCurrentWorkspace','getCurrentWorkspace','setAppForeground','setBuildState','getProviderSecretMeta','getProviderSecret','putProviderSecret','removeProviderSecret','saveProviderSecrets','scheduleBackgroundBuild','cancelBackgroundBuild','completeBackgroundBuild','getBackgroundBuildResult','requestAi','loginAsync','registerAsync','forgotPasswordAsync','sendEmailVerificationAsync','deleteAccountAsync','syncCurrentProjectAsync','authStatus','logout','getJob','clearLocalData','shareImage']);
         function nativeBridgeCall(method, payload) {
             try {
                 const bridge = window.AndroidBridge;
@@ -5391,10 +5398,11 @@
             }
             list.innerHTML = assets.map((a, idx) => `
                 <div class="asset-item">
-                    <div class="asset-thumb" style="display:flex;align-items:center;justify-content:center;color:var(--c-cyan);">${ic(assetIconName(a))}</div>
+                    <div class="asset-thumb" style="display:flex;align-items:center;justify-content:center;color:var(--c-cyan);">${a.type?.startsWith('image/') && a.dataUrl ? `<img src="${a.dataUrl}" alt="${escapeAttr(a.filename)}">` : ic(assetIconName(a))}</div>
                     <div class="asset-name" title="${escapeAttr(a.filename)}">${escapeHtml(a.filename)}<small style="display:block;color:var(--text-dim);font-size:9px;">${escapeHtml(a.type || 'application/octet-stream')} · ${formatBytes(a.size || 0)}</small></div>
                     <div class="asset-actions">
                         ${isTextLikeFile(a) ? `<button onclick="openAssetInEditor(${idx})" title="فتح في المحرر">${ic('code')}</button>` : ''}
+                        ${a.type?.startsWith('image/') && a.dataUrl ? `<button onclick="shareAssetImage(${idx})" title="مشاركة الصورة">${ic('share')}</button>` : ''}
                         <button onclick="copyAssetUrl(${idx})" title="نسخ الرابط">${ic('copy')}</button>
                         <button onclick="deleteAsset(${idx})" title="حذف">${ic('trash')}</button>
                     </div>
@@ -5462,6 +5470,23 @@
             const asset = assets[idx];
             if (!asset) return;
             navigator.clipboard.writeText(asset.dataUrl).then(() => showToast("تم نسخ رابط الصورة (Base64)", "ok"));
+        }
+
+        function shareAssetImage(idx) {
+            const asset = assets[idx];
+            if (!asset?.dataUrl || !asset.type?.startsWith('image/')) return;
+            if (window.AndroidBridge) {
+                const result = nativeBridgeCall('shareImage', JSON.stringify({ dataUrl: asset.dataUrl, filename: asset.filename }));
+                try { const parsed = JSON.parse(result || '{}'); if (parsed.ok) return; } catch (e) {}
+                showToast('تعذر فتح مشاركة الصورة', 'warn');
+                return;
+            }
+            try {
+                const bytes = atob(asset.dataUrl.split(',')[1]);
+                const buffer = new Uint8Array(bytes.length);
+                for (let i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+                navigator.share({ files: [new File([buffer], asset.filename, { type: asset.type })], title: asset.filename }).catch(() => {});
+            } catch (e) { showToast('مشاركة الصور متاحة داخل تطبيق Android', 'warn'); }
         }
 
         function deleteAsset(idx) { assets.splice(idx, 1);
@@ -6911,7 +6936,7 @@ ${gatewaySettings.contextHandoff && taskMemory ? '\nملخص أعمال سابق
             osc.stop(t0 + duration + 0.02);
         }
         function playSound(name) {
-            if (!soundEnabled) return;
+            if (!soundEnabled || document.visibilityState !== 'visible') return;
             switch (name) {
                 case 'tap':
                     playTone(620, 0.06, 'sine', 0.10);

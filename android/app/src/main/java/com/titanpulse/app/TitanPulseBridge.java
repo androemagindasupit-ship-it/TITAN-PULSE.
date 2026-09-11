@@ -6,16 +6,23 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ClipData;
+import android.media.AudioAttributes;
+import android.net.Uri;
+import android.provider.Settings;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.BitmapFactory;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.FileProvider;
 
 import com.titanpulse.app.core.JobStatus;
 import com.titanpulse.app.data.DraftEntity;
@@ -31,7 +38,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +53,9 @@ public final class TitanPulseBridge {
     static final String PREFS = "titan_pulse_native";
     private static final String CHANNEL_GENERAL = "titan_pulse_general";
     private static final String CHANNEL_BUILD = "titan_pulse_builds";
+    private static final String CHANNEL_SYNC = "titan_pulse_sync";
+    private static final String CHANNEL_SECURITY = "titan_pulse_security";
+    private static final String CHANNEL_ERRORS = "titan_pulse_errors";
     private static final int REQUEST_NOTIFICATIONS = 731;
     private static final int NOTIFICATION_ID_BASE = 12000;
     private final Activity activity;
@@ -66,21 +78,30 @@ public final class TitanPulseBridge {
         this.secureKeyStore.bindDeviceOwner(getDeviceId());
         this.firebase = FirebaseSyncService.get(activity);
         this.bridgeToken = bridgeToken == null ? "" : bridgeToken;
-        createChannels();
+        ensureNotificationChannels(activity);
     }
 
-    private void createChannels() {
+    static void ensureNotificationChannels(Context context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        NotificationManager nm = activity.getSystemService(NotificationManager.class);
+        NotificationManager nm = context.getSystemService(NotificationManager.class);
         if (nm == null) return;
-        NotificationChannel general = new NotificationChannel(CHANNEL_GENERAL, "TITAN PULSE", NotificationManager.IMPORTANCE_DEFAULT);
-        general.setDescription("إشعارات TITAN PULSE العامة وحالة المزامنة");
-        general.enableVibration(true);
-        nm.createNotificationChannel(general);
-        NotificationChannel build = new NotificationChannel(CHANNEL_BUILD, "بناء المشاريع", NotificationManager.IMPORTANCE_DEFAULT);
-        build.setDescription("إشعارات اكتمال وفشل مهام بناء المشاريع");
-        build.enableVibration(true);
-        nm.createNotificationChannel(build);
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+        createChannel(nm, CHANNEL_GENERAL, "TITAN PULSE", "إشعارات TITAN PULSE العامة", NotificationManager.IMPORTANCE_DEFAULT, true, audioAttributes);
+        createChannel(nm, CHANNEL_BUILD, "بناء المشاريع", "نجاح وفشل مهام بناء المشاريع", NotificationManager.IMPORTANCE_DEFAULT, true, audioAttributes);
+        createChannel(nm, CHANNEL_SYNC, "المزامنة", "حالة مزامنة البيانات", NotificationManager.IMPORTANCE_LOW, false, audioAttributes);
+        createChannel(nm, CHANNEL_SECURITY, "الأمان", "أحداث الأمان وتسجيل الدخول", NotificationManager.IMPORTANCE_HIGH, true, audioAttributes);
+        createChannel(nm, CHANNEL_ERRORS, "الأخطاء", "الأخطاء المهمة داخل التطبيق", NotificationManager.IMPORTANCE_HIGH, true, audioAttributes);
+    }
+
+    private static void createChannel(NotificationManager manager, String id, String name, String description, int importance, boolean sound, AudioAttributes audioAttributes) {
+        NotificationChannel channel = new NotificationChannel(id, name, importance);
+        channel.setDescription(description);
+        channel.enableVibration(importance != NotificationManager.IMPORTANCE_LOW);
+        if (sound) channel.setSound(Settings.System.DEFAULT_NOTIFICATION_URI, audioAttributes);
+        manager.createNotificationChannel(channel);
     }
 
     @JavascriptInterface public void requestNotificationPermission(String payload) {
@@ -132,6 +153,34 @@ public final class TitanPulseBridge {
             showNotification(activity, data.optString("title", "TITAN PULSE"), data.optString("body", "حدث جديد."), data.optString("jobId", ""), data.optString("projectId", ""), CHANNEL_GENERAL);
             return "ok";
         } catch (Exception e) { return errorJson("NOTIFICATION", "تعذر إنشاء الإشعار."); }
+    }
+
+    @JavascriptInterface public String shareImage(String payload) {
+        try {
+            JSONObject data = requirePayload(payload);
+            String dataUrl = data.optString("dataUrl", "");
+            String filename = data.optString("filename", "titan-pulse-image.png");
+            if (!dataUrl.startsWith("data:image/") || !dataUrl.contains(",")) return errorJson("SHARE_IMAGE", "صيغة الصورة غير مدعومة.");
+            String mimeType = dataUrl.startsWith("data:image/jpeg") || dataUrl.startsWith("data:image/jpg") ? "image/jpeg" : dataUrl.startsWith("data:image/webp") ? "image/webp" : "image/png";
+            String extension = "image/jpeg".equals(mimeType) ? ".jpg" : "image/webp".equals(mimeType) ? ".webp" : ".png";
+            byte[] bytes = Base64.getDecoder().decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
+            if (bytes.length == 0 || bytes.length > 25 * 1024 * 1024) return errorJson("SHARE_IMAGE", "حجم الصورة غير صالح.");
+            File shareDir = new File(activity.getCacheDir(), "titan-share");
+            if (!shareDir.exists() && !shareDir.mkdirs()) return errorJson("SHARE_IMAGE", "تعذر تجهيز ملف المشاركة.");
+            String safeName = filename.replaceAll("[^A-Za-z0-9._-]", "_");
+            if (!safeName.contains(".")) safeName += extension;
+            File output = new File(shareDir, System.currentTimeMillis() + "-" + safeName);
+            try (FileOutputStream stream = new FileOutputStream(output)) { stream.write(bytes); }
+            Uri uri = FileProvider.getUriForFile(activity, activity.getPackageName() + ".fileprovider", output);
+            Intent send = new Intent(Intent.ACTION_SEND)
+                    .setType(mimeType)
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            send.setClipData(ClipData.newRawUri("TITAN PULSE image", uri));
+            activity.runOnUiThread(() -> activity.startActivity(Intent.createChooser(send, "مشاركة الصورة")));
+            new Handler(Looper.getMainLooper()).postDelayed(() -> { if (output.exists()) output.delete(); }, 15 * 60 * 1000L);
+            return "{\"ok\":true}";
+        } catch (Exception e) { return errorJson("SHARE_IMAGE", "تعذر مشاركة الصورة."); }
     }
 
     static void sendNativeNotification(Context context, String title, String body, String jobId, String projectId) {

@@ -34,6 +34,17 @@ if (!firebase.includes('public/firebase_config.json')) fail('Capacitor asset Fir
 if (fs.existsSync(path.join(root, 'native'))) fail('stale duplicate native/ source tree must not ship');
 if (!html.includes('requestNotificationPermission')) fail('notification permission bridge missing');
 if (!html.includes('queueNotification')) fail('notification queue bridge missing');
+if (!html.includes("shareAssetImage")) fail('image share UI missing');
+if (!html.includes("nativeBridgeCall('shareImage'")) fail('native image share call missing');
+if (!bridge.includes('ACTION_SEND') || !bridge.includes('EXTRA_STREAM')) fail('native image share intent missing');
+if (!bridge.includes('FileProvider.getUriForFile')) fail('secure image content URI missing');
+if (!bridge.includes('FLAG_GRANT_READ_URI_PERMISSION')) fail('image URI read grant missing');
+if (!bridge.includes('setSound(Settings.System.DEFAULT_NOTIFICATION_URI')) fail('notification channel sound missing');
+for (const channel of ['CHANNEL_GENERAL','CHANNEL_BUILD','CHANNEL_SYNC','CHANNEL_SECURITY','CHANNEL_ERRORS']) {
+  if (!bridge.includes(channel)) fail(`notification channel missing: ${channel}`);
+}
+if (!html.includes("document.visibilityState !== 'visible'")) fail('background Web Audio guard missing');
+if (!html.includes('object-fit: contain')) fail('content image aspect-ratio rule missing');
 for (const f of ['FINAL_VERIFICATION.md','PRIVACY.md']) if (!fs.existsSync(path.join(root,f))) fail(`missing ${f}`);
 for (const f of ['android/gradlew','android/gradlew.bat','android/gradle/wrapper/gradle-wrapper.jar']) if (!fs.existsSync(path.join(root,f))) fail(`missing ${f}`);
 if (!html.includes("meta http-equiv=\"Content-Security-Policy\"")) {

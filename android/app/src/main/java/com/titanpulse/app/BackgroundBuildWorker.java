@@ -347,10 +347,7 @@ public final class BackgroundBuildWorker extends Worker {
     }
 
     private void createChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            NotificationManager nm = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.createNotificationChannel(new NotificationChannel(CHANNEL_ID, "TITAN PULSE — بناء المشاريع", NotificationManager.IMPORTANCE_LOW));
-        }
+        TitanPulseBridge.ensureNotificationChannels(getApplicationContext());
     }
 
     private Notification buildForegroundNotification(String title, int progress) {
